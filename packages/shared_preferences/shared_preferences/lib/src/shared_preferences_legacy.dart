@@ -27,6 +27,33 @@ class SharedPreferences {
 
   static Completer<SharedPreferences>? _completer;
 
+  /// using to handle values changes
+  final StreamController<Map<String,dynamic>> _streamController = StreamController<Map<String,dynamic>>.broadcast();
+
+  /// this key using ass global key when call clear function to notify all keys
+  final String _clearKey ='clear_storage_file_@@@###';
+
+  ///  using for listen to changes by pass the key
+  Stream<dynamic> listen(String key){
+  return   _streamController.stream.where((Map<String,dynamic> e)=>e['key']==key || e['key']==_clearKey && e['changed']==true)
+      .map((Map<String,dynamic> e) => e['value']);
+  }
+
+  ///  using for listen to changes by pass the key
+  Stream<dynamic> getAndListen(String key){
+    Future.delayed(const  Duration(milliseconds: 300)).then((dynamic e){
+      _streamController.add(<String,dynamic>{
+        'key':key,
+        'value':_preferenceCache[key],
+        'changed':false
+      });
+    });
+
+
+    return   _streamController.stream.where((Map<String,dynamic> e)=>e['key']==key || e['key']==_clearKey )
+        .map((Map<String,dynamic> e) => e['value']);
+  }
+
   static SharedPreferencesStorePlatform get _store =>
       SharedPreferencesStorePlatform.instance;
 
@@ -169,13 +196,22 @@ class SharedPreferences {
       _setValue('StringList', key, value);
 
   /// Removes an entry from persistent storage.
-  Future<bool> remove(String key) {
+  Future<bool> remove(String key) async{
     final String prefixedKey = '$_prefix$key';
     _preferenceCache.remove(key);
-    return _store.remove(prefixedKey);
+    final bool isRemoved =await _store.remove(prefixedKey);
+
+    if(isRemoved){
+      _streamController.add(<String,dynamic>{
+        'key':key,
+        'value':null,
+        'changed':true
+      });
+    }
+    return isRemoved;
   }
 
-  Future<bool> _setValue(String valueType, String key, Object value) {
+  Future<bool> _setValue(String valueType, String key, Object value) async{
     ArgumentError.checkNotNull(value, 'value');
     final String prefixedKey = '$_prefix$key';
     if (value is List<String>) {
@@ -184,7 +220,16 @@ class SharedPreferences {
     } else {
       _preferenceCache[key] = value;
     }
-    return _store.setValue(valueType, prefixedKey, value);
+
+    final bool isSaved =await _store.setValue(valueType, prefixedKey, value);
+    if(isSaved) {
+      _streamController.add(<String,dynamic>{
+      'key':key,
+      'value':value,
+      'changed':true
+      });
+    }
+    return isSaved;
   }
 
   /// Always returns true.
@@ -193,11 +238,11 @@ class SharedPreferences {
   Future<bool> commit() async => true;
 
   /// Completes with true once the user preferences for the app has been cleared.
-  Future<bool> clear() {
+  Future<bool> clear()  async{
     _preferenceCache.clear();
     if (_prefixHasBeenChanged) {
       try {
-        return _store.clearWithParameters(
+        final bool isCleared =await _store.clearWithParameters(
           ClearParameters(
             filter: PreferencesFilter(
               prefix: _prefix,
@@ -205,6 +250,16 @@ class SharedPreferences {
             ),
           ),
         );
+
+        if(isCleared){
+          _streamController.add(<String,dynamic>{
+            'key':_clearKey,
+            'value':null,
+            'changed':true
+          });
+        }
+
+        return isCleared;
       } catch (e) {
         // Catching and clarifying UnimplementedError to provide a more robust message.
         if (e is UnimplementedError) {
